@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Kafka — Cluster, Brokers & Replication</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;padding:28px 20px;}
+
+h1{text-align:center;font-size:1.25rem;color:#94a3b8;letter-spacing:1px;margin-bottom:4px;}
+.subtitle{text-align:center;font-size:0.78rem;color:#475569;margin-bottom:24px;}
+
+/* ── legend ── */
+.legend{display:flex;gap:20px;justify-content:center;margin-bottom:20px;flex-wrap:wrap;}
+.leg-item{display:flex;align-items:center;gap:6px;font-size:0.72rem;color:#94a3b8;}
+.leg-dot{width:12px;height:12px;border-radius:3px;}
+
+/* ── layout ── */
+.layout{display:flex;flex-direction:column;gap:16px;max-width:1080px;margin:0 auto;}
+
+/* ── cluster box ── */
+.cluster{
+  border:2px dashed #334155;border-radius:18px;padding:20px 16px;
+  background:#111827;position:relative;
+}
+.cluster-label{
+  position:absolute;top:-13px;left:20px;
+  background:#111827;padding:0 8px;
+  font-size:0.65rem;color:#64748b;letter-spacing:2px;text-transform:uppercase;
+}
+
+/* ── brokers row ── */
+.brokers-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;}
+
+/* ── broker ── */
+.broker{
+  background:#1e293b;border:2px solid #334155;border-radius:14px;
+  padding:14px 12px;width:220px;flex-shrink:0;transition:border-color 0.3s,box-shadow 0.3s;
+  position:relative;
+}
+.broker.leader-host{border-color:#3b82f6;box-shadow:0 0 14px #3b82f630;}
+.broker.dead{border-color:#dc2626!important;box-shadow:0 0 16px #dc262640!important;opacity:0.65;}
+
+.broker-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+.broker-name{font-size:0.85rem;font-weight:700;color:#e2e8f0;}
+.broker-id{font-size:0.65rem;color:#64748b;background:#0f172a;padding:2px 6px;border-radius:4px;}
+.controller-badge{font-size:0.6rem;background:#1d4ed8;color:#bfdbfe;padding:2px 6px;border-radius:4px;margin-left:4px;}
+.dead-badge{font-size:0.6rem;background:#7f1d1d;color:#fca5a5;padding:2px 6px;border-radius:4px;}
+
+/* ── partition pill ── */
+.partitions-list{display:flex;flex-direction:column;gap:6px;}
+.part-pill{
+  display:flex;align-items:center;gap:8px;
+  border-radius:8px;padding:6px 9px;border:1.5px solid;
+  font-size:0.7rem;transition:all 0.3s;
+}
+.part-pill.leader{background:#1e3a5f;border-color:#3b82f6;}
+.part-pill.replica{background:#1a1f2e;border-color:#334155;}
+.part-pill.becoming-leader{background:#1a3a1a;border-color:#22c55e;animation:pulse-green 0.8s ease-in-out 3;}
+
+@keyframes pulse-green{0%,100%{box-shadow:none;}50%{box-shadow:0 0 10px #22c55e80;}}
+
+.pill-icon{font-size:0.75rem;flex-shrink:0;}
+.pill-topic{color:#94a3b8;flex:1;}
+.pill-part{font-weight:700;}
+.pill-role{
+  font-size:0.58rem;padding:1px 5px;border-radius:3px;white-space:nowrap;
+}
+.pill-role.L{background:#1d4ed8;color:#bfdbfe;}
+.pill-role.F{background:#292d3e;color:#64748b;}
+.pill-role.L-new{background:#166534;color:#86efac;}
+
+.isr-badge{font-size:0.58rem;color:#475569;margin-top:2px;padding-left:2px;}
+
+/* ── zookeeper / controller info ── */
+.infra-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:4px;}
+.infra-box{
+  background:#1e293b;border:1.5px solid #334155;border-radius:12px;
+  padding:12px 16px;text-align:center;min-width:160px;
+}
+.infra-title{font-size:0.62rem;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;}
+.infra-name{font-size:0.88rem;font-weight:700;color:#a78bfa;}
+.infra-desc{font-size:0.62rem;color:#475569;margin-top:4px;line-height:1.5;}
+
+/* ── replication arrows canvas ── */
+.rep-canvas-wrap{position:relative;height:0;overflow:visible;}
+svg#repSvg{position:absolute;top:0;left:0;pointer-events:none;z-index:5;overflow:visible;}
+
+/* ── info cards ── */
+.info-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;max-width:1080px;margin:0 auto;}
+.info-card{
+  background:#1e293b;border:1.5px solid #334155;border-radius:12px;
+  padding:14px 16px;flex:1;min-width:220px;max-width:320px;
+}
+.info-card h3{font-size:0.78rem;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;}
+.info-card ul{list-style:none;display:flex;flex-direction:column;gap:6px;}
+.info-card li{font-size:0.72rem;color:#64748b;padding-left:12px;position:relative;line-height:1.5;}
+.info-card li::before{content:'›';position:absolute;left:0;color:#3b82f6;}
+.info-card li b{color:#e2e8f0;}
+
+/* ── controls ── */
+.controls{text-align:center;margin:16px auto;max-width:1080px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
+button{
+  background:#1e3a5f;border:1.5px solid #3b82f6;color:#93c5fd;
+  border-radius:8px;padding:8px 18px;font-size:0.78rem;cursor:pointer;transition:all 0.15s;
+}
+button:hover{background:#1d4ed8;color:#fff;}
+button.danger{background:#3b1f1f;border-color:#f87171;color:#fca5a5;}
+button.danger:hover{background:#dc2626;color:#fff;}
+button.success{background:#14532d;border-color:#22c55e;color:#86efac;}
+button.success:hover{background:#166534;color:#fff;}
+button:disabled{opacity:0.4;cursor:default;}
+
+/* ── log ── */
+.log-panel{
+  max-width:1080px;margin:12px auto 0;background:#0a0f1a;
+  border:1px solid #1e293b;border-radius:12px;padding:12px 16px;
+  height:110px;overflow-y:auto;
+}
+.log-panel::-webkit-scrollbar{width:3px;}
+.log-panel::-webkit-scrollbar-thumb{background:#334155;border-radius:2px;}
+.log-entry{font-size:0.68rem;color:#475569;line-height:1.9;font-family:monospace;}
+.log-entry .ts{color:#1e293b;}
+.log-entry b{color:#94a3b8;}
+.log-entry .ok{color:#4ade80;}
+.log-entry .warn{color:#facc15;}
+.log-entry .err{color:#f87171;}
+.log-entry .info{color:#60a5fa;}
+</style>
+</head>
+<body>
+
+<h1>Kafka — Cluster, Brokers & Replication</h1>
+<p class="subtitle">How partitions are distributed across brokers · replication factor · leader election on failure</p>
+
+<div class="legend">
+  <div class="leg-item"><div class="leg-dot" style="background:#1d4ed8;border:1px solid #3b82f6"></div> Leader partition</div>
+  <div class="leg-item"><div class="leg-dot" style="background:#292d3e;border:1px solid #475569"></div> Follower (replica)</div>
+  <div class="leg-item"><div class="leg-dot" style="background:#166534;border:1px solid #22c55e"></div> Newly elected leader</div>
+  <div class="leg-item"><div class="leg-dot" style="background:#7f1d1d;border:1px solid #dc2626"></div> Dead broker</div>
+</div>
+
+<div class="controls">
+  <button id="btnAnimate">▶ Animate Replication</button>
+  <button id="btnFailover" class="danger">💀 Kill Broker 1 (Leader)</button>
+  <button id="btnRestore" class="success" disabled>♻ Restore Broker 1</button>
+</div>
+
+<div class="layout">
+
+  <!-- Cluster -->
+  <div class="cluster" id="cluster">
+    <div class="cluster-label">Kafka Cluster &nbsp;·&nbsp; replication-factor = 3 &nbsp;·&nbsp; 3 brokers</div>
+
+    <div class="brokers-row" id="brokersRow">
+
+      <!-- Broker 0 -->
+      <div class="broker leader-host" id="broker0">
+        <div class="broker-header">
+          <span class="broker-name">Broker 0</span>
+          <span><span class="broker-id">id:0</span></span>
+        </div>
+        <div class="partitions-list">
+          <div class="part-pill leader" id="b0_p0">
+            <span class="pill-icon">📦</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P0</span>
+            <span class="pill-role L" id="b0_p0_role">L</span>
+          </div>
+          <div class="isr-badge" id="b0_p0_isr">ISR: [0,1,2]</div>
+
+          <div class="part-pill replica" id="b0_p1">
+            <span class="pill-icon">📄</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P1</span>
+            <span class="pill-role F" id="b0_p1_role">F</span>
+          </div>
+
+          <div class="part-pill replica" id="b0_p2">
+            <span class="pill-icon">📄</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P2</span>
+            <span class="pill-role F" id="b0_p2_role">F</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Broker 1 -->
+      <div class="broker" id="broker1">
+        <div class="broker-header">
+          <span class="broker-name">Broker 1</span>
+          <span><span class="broker-id">id:1</span><span class="controller-badge" id="ctrlBadge">Controller</span></span>
+        </div>
+        <div class="partitions-list">
+          <div class="part-pill replica" id="b1_p0">
+            <span class="pill-icon">📄</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P0</span>
+            <span class="pill-role F" id="b1_p0_role">F</span>
+          </div>
+
+          <div class="part-pill leader" id="b1_p1">
+            <span class="pill-icon">📦</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P1</span>
+            <span class="pill-role L" id="b1_p1_role">L</span>
+          </div>
+          <div class="isr-badge" id="b1_p1_isr">ISR: [0,1,2]</div>
+
+          <div class="part-pill replica" id="b1_p2">
+            <span class="pill-icon">📄</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P2</span>
+            <span class="pill-role F" id="b1_p2_role">F</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Broker 2 -->
+      <div class="broker" id="broker2">
+        <div class="broker-header">
+          <span class="broker-name">Broker 2</span>
+          <span><span class="broker-id">id:2</span></span>
+        </div>
+        <div class="partitions-list">
+          <div class="part-pill replica" id="b2_p0">
+            <span class="pill-icon">📄</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P0</span>
+            <span class="pill-role F" id="b2_p0_role">F</span>
+          </div>
+
+          <div class="part-pill replica" id="b2_p1">
+            <span class="pill-icon">📄</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P1</span>
+            <span class="pill-role F" id="b2_p1_role">F</span>
+          </div>
+
+          <div class="part-pill leader" id="b2_p2">
+            <span class="pill-icon">📦</span>
+            <span class="pill-topic">digilocker-verification</span>
+            <span class="pill-part">P2</span>
+            <span class="pill-role L" id="b2_p2_role">L</span>
+          </div>
+          <div class="isr-badge" id="b2_p2_isr">ISR: [0,1,2]</div>
+        </div>
+      </div>
+
+    </div><!-- /brokers-row -->
+  </div><!-- /cluster -->
+
+  <!-- Infra row -->
+  <div class="infra-row">
+    <div class="infra-box">
+      <div class="infra-title">ZooKeeper / KRaft</div>
+      <div class="infra-name">Metadata Store</div>
+      <div class="infra-desc">Tracks broker liveness · stores topic configs · manages controller election</div>
+    </div>
+    <div class="infra-box">
+      <div class="infra-title">Controller (Broker 1)</div>
+      <div class="infra-name">Cluster Brain</div>
+      <div class="infra-desc">Monitors broker heartbeats · triggers leader election on failure · updates ISR list</div>
+    </div>
+    <div class="infra-box">
+      <div class="infra-title">ISR — In-Sync Replicas</div>
+      <div class="infra-name">Durability Guard</div>
+      <div class="infra-desc">Producer acks only after ISR confirms write · follower removed from ISR if it lags behind leader</div>
+    </div>
+  </div>
+
+  <!-- Info cards -->
+  <div class="info-row">
+    <div class="info-card">
+      <h3>What is a Broker?</h3>
+      <ul>
+        <li><b>A server</b> in the Kafka cluster that stores and serves messages</li>
+        <li>Hosts <b>one or more partition replicas</b> of a topic</li>
+        <li>Each partition has <b>exactly one leader broker</b> at any time</li>
+        <li>Producers write to the <b>leader</b>; followers pull from it</li>
+      </ul>
+    </div>
+    <div class="info-card">
+      <h3>What is Replication?</h3>
+      <ul>
+        <li>Each partition is copied across <b>N brokers</b> (replication-factor)</li>
+        <li>Here: <b>replication-factor = 3</b> → P0 lives on Broker 0, 1, 2</li>
+        <li>Only the <b>leader</b> serves reads/writes; followers just sync</li>
+        <li>Guarantees <b>no data loss</b> if a broker dies</li>
+      </ul>
+    </div>
+    <div class="info-card">
+      <h3>Leader Election on Failure</h3>
+      <ul>
+        <li>Controller detects broker <b>heartbeat timeout</b></li>
+        <li>Picks a follower from the ISR as the <b>new leader</b></li>
+        <li>Updates metadata — producers/consumers <b>auto-redirect</b></li>
+        <li>When broker recovers, it rejoins as a <b>follower</b> and resyncs</li>
+      </ul>
+    </div>
+  </div>
+
+</div><!-- /layout -->
+
+<!-- SVG overlay for replication arrows -->
+<svg id="repSvg" style="position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:100;overflow:visible;"></svg>
+
+<div class="log-panel" id="logPanel"></div>
+
+<script>
+let animating = false;
+let animTimer = null;
+let brokerOneDead = false;
+
+/* ─── logging ─── */
+function log(html){
+  const p = document.getElementById('logPanel');
+  const d = document.createElement('div');
+  d.className = 'log-entry';
+  const now = new Date();
+  const ts = now.toTimeString().slice(0,8);
+  d.innerHTML = `<span class="ts">[${ts}]</span> ${html}`;
+  p.appendChild(d);
+  p.scrollTop = p.scrollHeight;
+}
+
+/* ─── animated replication dot ─── */
+function repDot(fromEl, toEl, color, label, delay, onDone){
+  setTimeout(()=>{
+    const svg = document.getElementById('repSvg');
+    const fr = fromEl.getBoundingClientRect();
+    const to = toEl.getBoundingClientRect();
+    const sx = fr.left + fr.width/2, sy = fr.top + fr.height/2;
+    const ex = to.left + to.width/2, ey = to.top + to.height/2;
+
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+
+    // dashed line
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',sx); line.setAttribute('y1',sy);
+    line.setAttribute('x2',ex); line.setAttribute('y2',ey);
+    line.setAttribute('stroke',color); line.setAttribute('stroke-width','1.5');
+    line.setAttribute('stroke-dasharray','5,4'); line.setAttribute('opacity','0.35');
+
+    // moving circle
+    const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('r','7'); circle.setAttribute('fill',color); circle.setAttribute('opacity','0.9');
+    const txt = document.createElementNS('http://www.w3.org/2000/svg','text');
+    txt.setAttribute('text-anchor','middle'); txt.setAttribute('dominant-baseline','middle');
+    txt.setAttribute('font-size','7'); txt.setAttribute('fill','#fff'); txt.setAttribute('font-weight','700');
+    txt.textContent = label;
+
+    g.appendChild(line); g.appendChild(circle); g.appendChild(txt);
+    svg.appendChild(g);
+
+    const dur = 700;
+    const start = performance.now();
+    function step(now){
+      const t = Math.min((now-start)/dur,1);
+      const ease = t<0.5?2*t*t:-1+(4-2*t)*t;
+      const cx = sx+(ex-sx)*ease, cy = sy+(ey-sy)*ease;
+      circle.setAttribute('cx',cx); circle.setAttribute('cy',cy);
+      txt.setAttribute('x',cx); txt.setAttribute('y',cy);
+      if(t<1){ requestAnimationFrame(step); }
+      else { g.remove(); if(onDone) onDone(); }
+    }
+    requestAnimationFrame(step);
+  }, delay);
+}
+
+/* ─── animate one replication round ─── */
+function animateReplication(){
+  if(brokerOneDead) return;
+  const b0p0 = document.getElementById('b0_p0');
+  const b0p1 = document.getElementById('b0_p1');
+  const b0p2 = document.getElementById('b0_p2');
+  const b1p0 = document.getElementById('b1_p0');
+  const b1p1 = document.getElementById('b1_p1');
+  const b1p2 = document.getElementById('b1_p2');
+  const b2p0 = document.getElementById('b2_p0');
+  const b2p1 = document.getElementById('b2_p1');
+  const b2p2 = document.getElementById('b2_p2');
+
+  log('<span class="info">REPLICATE</span> P0 leader(B0) → followers B1,B2');
+  repDot(b0p0, b1p0, '#3b82f6', 'P0', 0);
+  repDot(b0p0, b2p0, '#3b82f6', 'P0', 120);
+
+  log('<span class="info">REPLICATE</span> P1 leader(B1) → followers B0,B2');
+  repDot(b1p1, b0p1, '#8b5cf6', 'P1', 300);
+  repDot(b1p1, b2p1, '#8b5cf6', 'P1', 420);
+
+  log('<span class="info">REPLICATE</span> P2 leader(B2) → followers B0,B1');
+  repDot(b2p2, b0p2, '#10b981', 'P2', 600);
+  repDot(b2p2, b1p2, '#10b981', 'P2', 720);
+}
+
+document.getElementById('btnAnimate').addEventListener('click',()=>{
+  if(animating){
+    clearInterval(animTimer); animating=false;
+    document.getElementById('btnAnimate').textContent='▶ Animate Replication';
+  } else {
+    animating=true;
+    document.getElementById('btnAnimate').textContent='⏸ Stop Animation';
+    animateReplication();
+    animTimer = setInterval(animateReplication, 2200);
+  }
+});
+
+/* ─── failover simulation ─── */
+document.getElementById('btnFailover').addEventListener('click',()=>{
+  if(brokerOneDead) return;
+  brokerOneDead = true;
+
+  if(animating){ clearInterval(animTimer); animating=false; document.getElementById('btnAnimate').textContent='▶ Animate Replication'; }
+
+  // kill broker 1
+  const b1 = document.getElementById('broker1');
+  b1.classList.add('dead');
+  b1.classList.remove('leader-host');
+  const header = b1.querySelector('.broker-header');
+  const deadBadge = document.createElement('span');
+  deadBadge.className='dead-badge'; deadBadge.id='deadBadge'; deadBadge.textContent='OFFLINE';
+  header.appendChild(deadBadge);
+  document.getElementById('ctrlBadge').style.display='none';
+
+  log('<span class="err">BROKER DOWN</span> Broker 1 heartbeat timeout detected by Controller');
+
+  // After short pause, elect new leaders
+  setTimeout(()=>{
+    log('<span class="warn">CONTROLLER</span> Broker 1 had leader for P1 → electing new leader from ISR [0,2]');
+
+    // P1: B0 becomes new leader
+    setTimeout(()=>{
+      const b0p1 = document.getElementById('b0_p1');
+      const b0p1role = document.getElementById('b0_p1_role');
+      b0p1.classList.remove('replica'); b0p1.classList.add('leader','becoming-leader');
+      b0p1.querySelector('.pill-icon').textContent='📦';
+      b0p1role.className='pill-role L-new'; b0p1role.textContent='L★';
+      document.getElementById('broker0').classList.add('leader-host');
+      log('<span class="ok">ELECTED</span> P1 new leader → Broker 0 (was in ISR)');
+
+      // update B1 P1 role display
+      const b1p1role = document.getElementById('b1_p1_role');
+      b1p1role.className='pill-role F'; b1p1role.textContent='—';
+      document.getElementById('b1_p1_isr').textContent='ISR: [0,2] (B1 removed)';
+
+      // Controller moves to B2
+      document.getElementById('ctrlBadge').style.display='none';
+      const b2header = document.getElementById('broker2').querySelector('.broker-header');
+      const newCtrl = document.createElement('span');
+      newCtrl.className='controller-badge'; newCtrl.textContent='Controller';
+      b2header.appendChild(newCtrl);
+      log('<span class="warn">CONTROLLER</span> Re-elected to Broker 2');
+
+      log('<span class="ok">PRODUCERS/CONSUMERS</span> Auto-redirected to new leaders via metadata refresh');
+    }, 800);
+
+    document.getElementById('btnFailover').disabled=true;
+    document.getElementById('btnRestore').disabled=false;
+  }, 1000);
+});
+
+/* ─── restore broker 1 ─── */
+document.getElementById('btnRestore').addEventListener('click',()=>{
+  brokerOneDead = false;
+
+  const b1 = document.getElementById('broker1');
+  b1.classList.remove('dead');
+  document.getElementById('deadBadge')?.remove();
+
+  // Reset P1 back to original state (B0 still leader, B1 is follower now)
+  const b0p1 = document.getElementById('b0_p1');
+  const b0p1role = document.getElementById('b0_p1_role');
+  b0p1.classList.remove('becoming-leader');
+
+  // restore b1 p1 as follower
+  const b1p1role = document.getElementById('b1_p1_role');
+  b1p1role.className='pill-role F'; b1p1role.textContent='F';
+  document.getElementById('b1_p1_isr').textContent='ISR: [0,1,2] (resynced)';
+  document.getElementById('ctrlBadge').style.display='';
+
+  log('<span class="ok">BROKER RESTORED</span> Broker 1 back online — rejoining as follower, resyncing from P1 leader (B0)');
+  log('<span class="info">RESYNC</span> Broker 1 P1 catching up with leader offset...');
+  setTimeout(()=>{
+    log('<span class="ok">INSYNC</span> Broker 1 P1 back in ISR — ISR: [0,1,2]');
+  },1000);
+
+  document.getElementById('btnFailover').disabled=false;
+  document.getElementById('btnRestore').disabled=true;
+});
+
+log('Cluster ready — 3 brokers · topic <b>digilocker-verification</b> · 3 partitions · replication-factor=3');
+log('Each partition has <b>1 Leader + 2 Followers</b> distributed across brokers');
+</script>
+</body>
+</html>
