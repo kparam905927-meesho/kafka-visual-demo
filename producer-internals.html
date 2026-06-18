@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Kafka — Producer Internals (Module 4)</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;padding:24px 20px;min-height:100vh}
+h1{text-align:center;font-size:1.25rem;color:#94a3b8;letter-spacing:1px;margin-bottom:4px}
+.sub{text-align:center;font-size:0.75rem;color:#475569;margin-bottom:28px}
+
+/* ── tabs ── */
+.tabs{display:flex;gap:8px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}
+.tab{padding:7px 18px;border-radius:8px;font-size:0.78rem;cursor:pointer;border:1.5px solid #334155;color:#64748b;background:#1e293b;transition:all .15s}
+.tab.active{border-color:#3b82f6;color:#93c5fd;background:#1e3a5f}
+
+.section{display:none;max-width:1080px;margin:0 auto}
+.section.active{display:block}
+
+/* ── pipeline section ── */
+.pipeline{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:nowrap;margin-bottom:24px;overflow-x:auto;padding:8px 0}
+.pbox{background:#1e293b;border:1.5px solid #334155;border-radius:10px;padding:10px 14px;text-align:center;min-width:100px;position:relative}
+.pbox .plabel{font-size:0.6rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+.pbox .pname{font-size:0.82rem;font-weight:700;color:#e2e8f0;margin-top:3px}
+.pbox .pdesc{font-size:0.62rem;color:#475569;margin-top:4px;line-height:1.4}
+.pbox.highlight{border-color:#3b82f6;background:#1e3a5f}
+.pbox.highlight .pname{color:#93c5fd}
+.arrow{color:#334155;font-size:1.4rem;flex-shrink:0;margin:0 2px;align-self:center}
+
+/* accumulator */
+.accum{background:#0f172a;border:1.5px solid #334155;border-radius:10px;padding:10px 14px;min-width:160px}
+.accum .plabel{font-size:0.6rem;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.part-row{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+.part-row:last-child{margin-bottom:0}
+.part-tag{font-size:0.6rem;color:#94a3b8;width:16px}
+.batch-bar{height:14px;background:#1e293b;border:1px solid #334155;border-radius:4px;flex:1;overflow:hidden;position:relative}
+.batch-fill{height:100%;border-radius:3px;transition:width .3s;background:#1d4ed8;width:0%}
+.batch-fill.p1{background:#7c3aed}
+.batch-fill.p2{background:#065f46}
+.batch-pct{position:absolute;right:4px;top:50%;transform:translateY(-50%);font-size:0.55rem;color:#94a3b8}
+
+/* broker */
+.broker-box{background:#1e293b;border:1.5px solid #334155;border-radius:10px;padding:10px 14px;min-width:110px;text-align:center}
+.broker-box .plabel{font-size:0.6rem;color:#64748b;text-transform:uppercase;letter-spacing:1px}
+.broker-box .pname{font-size:0.82rem;font-weight:700;color:#e2e8f0;margin-top:3px}
+.broker-pulse{width:10px;height:10px;border-radius:50%;background:#334155;margin:6px auto 0;transition:background .2s,box-shadow .2s}
+.broker-pulse.active{background:#22c55e;box-shadow:0 0 8px #22c55e}
+
+/* ── batching section ── */
+.batch-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.batch-card{background:#1e293b;border:1.5px solid #334155;border-radius:12px;padding:16px}
+.batch-card h3{font-size:0.78rem;color:#94a3b8;margin-bottom:4px}
+.batch-card .setting{font-size:0.72rem;color:#475569;margin-bottom:12px;font-family:monospace}
+.batch-card .setting b{color:#f59e0b}
+.network-calls{font-size:0.7rem;color:#64748b;margin-top:8px}
+.network-calls b{color:#f87171}
+.network-calls b.good{color:#4ade80}
+.mini-records{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:8px;min-height:24px}
+.mini-rec{width:18px;height:18px;border-radius:3px;background:#1d4ed8;border:1px solid #3b82f6;font-size:0.55rem;color:#bfdbfe;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.mini-rec.batched{background:#065f46;border-color:#10b981;color:#a7f3d0}
+.mini-rec.sending{background:#f59e0b;border-color:#fbbf24;color:#000;transform:scale(1.15)}
+.send-arrow{text-align:center;font-size:0.65rem;color:#475569;margin:4px 0}
+.mini-broker{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 10px;font-size:0.65rem;color:#64748b;text-align:center}
+
+/* ── idempotence section ── */
+.idem-layout{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.idem-card{background:#1e293b;border:1.5px solid #334155;border-radius:12px;padding:16px}
+.idem-card h3{font-size:0.78rem;color:#94a3b8;margin-bottom:12px}
+.pid-badge{display:inline-block;background:#1e3a5f;border:1px solid #3b82f6;border-radius:6px;padding:3px 10px;font-size:0.7rem;color:#93c5fd;font-family:monospace;margin-bottom:10px}
+.msg-record{display:flex;align-items:center;gap:8px;background:#0f172a;border:1.5px solid #334155;border-radius:8px;padding:7px 10px;margin-bottom:7px;font-size:0.68rem;font-family:monospace;transition:border-color .2s,background .2s}
+.msg-record.ok{border-color:#10b981;background:#0a1f14}
+.msg-record.dup{border-color:#f87171;background:#1f0a0a}
+.msg-record.ooo{border-color:#f59e0b;background:#1f180a}
+.tag{font-size:0.58rem;padding:2px 6px;border-radius:4px;font-weight:700}
+.tag.pid{background:#1e3a5f;color:#93c5fd}
+.tag.seq{background:#1e293b;color:#94a3b8}
+.tag.ok{background:#064e3b;color:#6ee7b7}
+.tag.dup{background:#450a0a;color:#fca5a5}
+.tag.ooo{background:#451a03;color:#fde68a}
+.broker-state{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;margin-top:10px}
+.broker-state .bs-title{font-size:0.6rem;color:#475569;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.seq-track{display:flex;gap:6px;align-items:center;font-size:0.65rem;font-family:monospace}
+.seq-track .st-label{color:#64748b;width:80px}
+.seq-val{background:#1e3a5f;border:1px solid #3b82f6;border-radius:4px;padding:2px 8px;color:#93c5fd;font-weight:700;transition:all .3s}
+
+/* ── config table ── */
+.cfg-table{width:100%;border-collapse:collapse;font-size:0.73rem}
+.cfg-table th{background:#1e293b;color:#64748b;text-transform:uppercase;letter-spacing:1px;font-size:0.6rem;padding:8px 12px;text-align:left;border-bottom:1px solid #334155}
+.cfg-table td{padding:9px 12px;border-bottom:1px solid #1e293b;vertical-align:top}
+.cfg-table tr:hover td{background:#1e293b22}
+.cfg-table td:first-child{font-family:monospace;color:#f59e0b;white-space:nowrap}
+.cfg-table td:nth-child(2){color:#94a3b8}
+.cfg-table td:nth-child(3){color:#475569}
+.cfg-table td:nth-child(4){color:#e2e8f0}
+.badge{display:inline-block;font-size:0.58rem;padding:2px 6px;border-radius:4px;font-weight:700;margin-right:3px}
+.badge.dur{background:#1e3a5f;color:#93c5fd}
+.badge.thr{background:#064e3b;color:#6ee7b7}
+.badge.rel{background:#3b1f00;color:#fde68a}
+
+/* ── controls ── */
+.ctrl{display:flex;gap:10px;justify-content:center;margin-bottom:20px;flex-wrap:wrap}
+button{background:#1e3a5f;border:1.5px solid #3b82f6;color:#93c5fd;border-radius:8px;padding:7px 18px;font-size:0.78rem;cursor:pointer;transition:all .15s}
+button:hover{background:#1d4ed8;color:#fff}
+button.warn{background:#3b1f1f;border-color:#f87171;color:#fca5a5}
+button.warn:hover{background:#dc2626;color:#fff}
+
+/* ── log ── */
+.log{background:#0a0f1a;border:1px solid #1e293b;border-radius:10px;padding:12px 16px;height:110px;overflow-y:auto;font-size:0.68rem;font-family:monospace;margin-top:16px}
+.log::-webkit-scrollbar{width:4px}
+.log::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
+.le{color:#475569;line-height:1.8}
+.le .ts{color:#1e293b}
+.le .ok{color:#4ade80;font-weight:700}
+.le .bad{color:#f87171;font-weight:700}
+.le .info{color:#60a5fa;font-weight:700}
+
+/* constraint note */
+.constraint{background:#1a1000;border:1px solid #f59e0b44;border-radius:8px;padding:10px 14px;font-size:0.7rem;color:#92400e;margin-top:12px;line-height:1.7}
+.constraint b{color:#fbbf24}
+</style>
+</head>
+<body>
+
+<h1>Kafka — Producer Internals</h1>
+<p class="sub">Module 4 · send() pipeline · batching · idempotence</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('pipeline')">Pipeline</div>
+  <div class="tab" onclick="showTab('batching')">Batching</div>
+  <div class="tab" onclick="showTab('idempotence')">Idempotence</div>
+  <div class="tab" onclick="showTab('config')">Config Knobs</div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     TAB 1 — PIPELINE
+═══════════════════════════════════════════════ -->
+<div class="section active" id="tab-pipeline">
+
+  <div class="pipeline" id="pipelineRow">
+    <div class="pbox highlight" id="pb-send">
+      <div class="plabel">entry</div>
+      <div class="pname">send()</div>
+      <div class="pdesc">producer.send<br/>(record)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pbox" id="pb-ser">
+      <div class="plabel">step 1</div>
+      <div class="pname">Serializer</div>
+      <div class="pdesc">key + value<br/>→ bytes</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pbox" id="pb-part">
+      <div class="plabel">step 2</div>
+      <div class="pname">Partitioner</div>
+      <div class="pdesc">hash(key) % N<br/>sticky (no key)</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="accum" id="pb-accum">
+      <div class="plabel">RecordAccumulator</div>
+      <div class="part-row">
+        <div class="part-tag">P0</div>
+        <div class="batch-bar"><div class="batch-fill" id="bf0"></div><span class="batch-pct" id="bp0">0%</span></div>
+      </div>
+      <div class="part-row">
+        <div class="part-tag">P1</div>
+        <div class="batch-bar"><div class="batch-fill p1" id="bf1"></div><span class="batch-pct" id="bp1">0%</span></div>
+      </div>
+      <div class="part-row">
+        <div class="part-tag">P2</div>
+        <div class="batch-bar"><div class="batch-fill p2" id="bf2"></div><span class="batch-pct" id="bp2">0%</span></div>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pbox" id="pb-sender">
+      <div class="plabel">I/O thread</div>
+      <div class="pname">Sender</div>
+      <div class="pdesc">drains full<br/>batches</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="broker-box" id="pb-broker">
+      <div class="plabel">Kafka</div>
+      <div class="pname">Broker</div>
+      <div class="broker-pulse" id="bpulse"></div>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button onclick="pipelineStep()">Send 1 Record</button>
+    <button onclick="pipelineAuto()" id="btnPA">▶ Auto</button>
+    <button class="warn" onclick="pipelineReset()">Reset</button>
+  </div>
+
+  <div class="log" id="logPipeline"></div>
+
+  <div class="constraint" style="margin-top:14px">
+    <b>Key insight:</b> <code>send()</code> returns immediately — it does NOT block for a network call. The record lands in the in-memory
+    <b>RecordAccumulator</b> (per-partition ring buffer). A background <b>Sender I/O thread</b> drains batches and does the actual TCP write.
+    This is why the producer is async by default — and why <code>sendAndWait</code> in the MQ client must explicitly call <code>Future.get()</code>
+    to block until the broker callback fires.
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     TAB 2 — BATCHING
+═══════════════════════════════════════════════ -->
+<div class="section" id="tab-batching">
+
+  <div class="batch-grid">
+    <div class="batch-card">
+      <h3>linger.ms = 0 (default)</h3>
+      <div class="setting">batch.size = 16KB &nbsp;|&nbsp; <b>linger.ms = 0</b></div>
+      <div class="mini-records" id="br0"></div>
+      <div class="send-arrow" id="sa0">↓ sends immediately (1 record per trip)</div>
+      <div class="mini-broker" id="mb0">Broker: 0 batches received</div>
+      <div class="network-calls" id="nc0">Network round-trips: <b>0</b></div>
+    </div>
+    <div class="batch-card">
+      <h3>linger.ms = 10ms</h3>
+      <div class="setting">batch.size = 16KB &nbsp;|&nbsp; <b>linger.ms = 10ms</b></div>
+      <div class="mini-records" id="br1"></div>
+      <div class="send-arrow" id="sa1">↓ waits 10ms, then flushes batch</div>
+      <div class="mini-broker" id="mb1">Broker: 0 batches received</div>
+      <div class="network-calls" id="nc1">Network round-trips: <b class="good">0</b></div>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button onclick="batchSend()">Send 8 Records</button>
+    <button onclick="batchReset()">Reset</button>
+  </div>
+
+  <div class="log" id="logBatch"></div>
+
+  <div class="constraint" style="margin-top:14px">
+    <b>Tuning rule:</b> High-volume producer → bump <b>linger.ms to 5–20ms</b> + <b>compression.type=lz4</b> + bigger <b>batch.size</b>.
+    Fewer, larger, compressed batches = dramatically less network I/O. Trade-off: ~10ms extra latency per record (usually acceptable for async flows).
+    <b>linger.ms=0</b> is correct for low-latency, low-volume use cases like UMS onboarding events.
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     TAB 3 — IDEMPOTENCE
+═══════════════════════════════════════════════ -->
+<div class="section" id="tab-idempotence">
+
+  <div class="idem-layout">
+    <div class="idem-card">
+      <h3>Producer side</h3>
+      <div class="pid-badge" id="pidBadge">PID = —</div>
+
+      <div id="msgList"></div>
+
+      <div class="constraint" style="margin-top:10px;font-size:0.67rem">
+        <b>Constraints for idempotence:</b><br/>
+        acks = all &nbsp;·&nbsp; retries > 0 &nbsp;·&nbsp; max.in.flight ≤ 5
+      </div>
+    </div>
+
+    <div class="idem-card">
+      <h3>Broker state (per PID, per partition)</h3>
+      <div class="broker-state">
+        <div class="bs-title">Last accepted sequence numbers</div>
+        <div class="seq-track" style="margin-bottom:6px">
+          <div class="st-label">P0 last seq:</div>
+          <div class="seq-val" id="bs0">—</div>
+        </div>
+        <div class="seq-track">
+          <div class="st-label">P1 last seq:</div>
+          <div class="seq-val" id="bs1">—</div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px">
+        <div id="brokerLog" style="font-size:0.68rem;font-family:monospace"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button onclick="idemNormal()">Normal Send (seq++)</button>
+    <button onclick="idemRetry()" class="warn">Simulate Retry (dup seq)</button>
+    <button onclick="idemOOO()" class="warn">Out-of-Order seq</button>
+    <button onclick="idemReset()">Reset</button>
+  </div>
+
+  <div class="log" id="logIdem"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════
+     TAB 4 — CONFIG KNOBS
+═══════════════════════════════════════════════ -->
+<div class="section" id="tab-config">
+  <table class="cfg-table">
+    <thead>
+      <tr>
+        <th>Config</th>
+        <th>Values</th>
+        <th>Default</th>
+        <th>What it does</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>acks</td>
+        <td><code>0</code> / <code>1</code> / <code>all</code></td>
+        <td>all (3.0+)</td>
+        <td><span class="badge dur">durability</span>
+          <b>0</b>=no ack (fire & forget, fastest, data loss risk) ·
+          <b>1</b>=leader ack (UMS current) ·
+          <b>all</b>=all ISR replicas ack (strongest, required for idempotence)</td>
+      </tr>
+      <tr>
+        <td>enable.idempotence</td>
+        <td><code>true</code> / <code>false</code></td>
+        <td>true (3.0+)</td>
+        <td><span class="badge rel">reliability</span>
+          Assigns PID + per-partition sequence numbers. Broker deduplicates retries and rejects out-of-order sequences.
+          Exactly-once per partition per producer session. Forces acks=all, retries>0, max.in.flight≤5.</td>
+      </tr>
+      <tr>
+        <td>batch.size</td>
+        <td>bytes</td>
+        <td>16384 (16KB)</td>
+        <td><span class="badge thr">throughput</span>
+          Max bytes per batch per partition. Sender flushes when batch hits this OR linger.ms expires. Larger = fewer, bigger network writes.</td>
+      </tr>
+      <tr>
+        <td>linger.ms</td>
+        <td>milliseconds</td>
+        <td>0</td>
+        <td><span class="badge thr">throughput</span>
+          How long to wait accumulating records before flushing, even if batch isn't full.
+          0 = send ASAP (low latency). 5–20ms = better batching (high throughput).</td>
+      </tr>
+      <tr>
+        <td>compression.type</td>
+        <td><code>none</code> / <code>lz4</code> / <code>zstd</code> / <code>snappy</code> / <code>gzip</code></td>
+        <td>none</td>
+        <td><span class="badge thr">throughput</span>
+          Compresses the batch before sending. <b>lz4</b>=fastest CPU, good ratio. <b>zstd</b>=best ratio, moderate CPU.
+          Applied per-batch — only useful with batching (linger.ms > 0).</td>
+      </tr>
+      <tr>
+        <td>max.in.flight.requests<br/>.per.connection</td>
+        <td>integer</td>
+        <td>5</td>
+        <td><span class="badge rel">reliability</span>
+          Max unacknowledged batches in-flight to one broker. With idempotence, broker tracks state for ≤5 batches to guarantee ordering.
+          Old advice: set to 1 for ordering without idempotence — now obsolete.</td>
+      </tr>
+      <tr>
+        <td>retries</td>
+        <td>integer</td>
+        <td>MAX_INT (3.0+)</td>
+        <td><span class="badge rel">reliability</span>
+          How many times to retry a failed send. With idempotence, retries are safe (broker deduplicates). Without idempotence, retries can produce duplicates.</td>
+      </tr>
+      <tr>
+        <td>delivery.timeout.ms</td>
+        <td>milliseconds</td>
+        <td>120000 (2 min)</td>
+        <td><span class="badge rel">reliability</span>
+          Total time budget for a record (from send() to ack or failure), including retries. Caps retry loops.
+          Must be ≥ request.timeout.ms + linger.ms.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="constraint" style="margin-top:16px">
+    <b>UMS current profile</b> (from MQ control plane): <code>acks=1</code> · <code>enable.idempotence</code> depends on MQ server config ·
+    <code>acksConfig</code> field in <code>ProducerDetails</code> is set at producer init time, not per-send. To change: update via MQ platform team, not application.yml.
+  </div>
+</div>
+
+<script>
+/* ── helpers ── */
+function showTab(name){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'))
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'))
+  document.getElementById('tab-'+name).classList.add('active')
+  document.querySelectorAll('.tab').forEach(t=>{ if(t.textContent.toLowerCase().includes(name.slice(0,4))) t.classList.add('active') })
+}
+function logTo(id,html){
+  const p=document.getElementById(id)
+  if(!p)return
+  const d=document.createElement('div'); d.className='le'
+  const ts=new Date().toTimeString().slice(0,8)
+  d.innerHTML=`<span class="ts">[${ts}]</span> ${html}`
+  p.appendChild(d); p.scrollTop=p.scrollHeight
+}
+
+/* ════════════════════════════════════
+   TAB 1 — PIPELINE
+════════════════════════════════════ */
+const batchFill=[0,0,0]
+const COLORS=['#3b82f6','#8b5cf6','#10b981']
+const PNAMES=['P0','P1','P2']
+let pAutoTimer=null, pMsgCount=0
+
+function highlight(id,color,ms){
+  const el=document.getElementById(id); if(!el)return
+  const prev=el.style.borderColor
+  el.style.borderColor=color; el.style.transition='border-color 0.15s'
+  setTimeout(()=>{ el.style.borderColor=prev },ms||400)
+}
+
+function pipelineStep(){
+  pMsgCount++
+  const p=pMsgCount%3
+  const msgId='M'+pMsgCount
+  const color=COLORS[p]
+
+  // highlight each stage with delay
+  const stages=[
+    {id:'pb-send',    delay:0,   msg:`<span class="info">send()</span> called — record=${msgId} buffered in memory`},
+    {id:'pb-ser',     delay:180, msg:`<span class="info">Serializer</span> — key+value → byte arrays`},
+    {id:'pb-part',    delay:360, msg:`<span class="info">Partitioner</span> — routed to ${PNAMES[p]} (hash(key) % 3)`},
+    {id:'pb-accum',   delay:540, msg:`<span class="info">RecordAccumulator</span> — appended to ${PNAMES[p]} batch`},
+    {id:'pb-sender',  delay:900, msg:`<span class="info">Sender I/O thread</span> — batch ready, draining`},
+    {id:'pb-broker',  delay:1100,msg:`<span class="ok">Broker acked</span> — ${msgId} written to ${PNAMES[p]}, offset ${pMsgCount-1}`},
+  ]
+
+  stages.forEach(({id,delay,msg})=>{
+    setTimeout(()=>{
+      highlight(id,color,300)
+      if(id==='pb-accum'){
+        batchFill[p]=Math.min(100,batchFill[p]+20)
+        document.getElementById('bf'+p).style.width=batchFill[p]+'%'
+        document.getElementById('bp'+p).textContent=batchFill[p]+'%'
+      }
+      if(id==='pb-sender'){
+        // flush batch
+        batchFill[p]=0
+        setTimeout(()=>{
+          document.getElementById('bf'+p).style.width='0%'
+          document.getElementById('bp'+p).textContent='0%'
+        },200)
+      }
+      if(id==='pb-broker'){
+        const pulse=document.getElementById('bpulse')
+        pulse.classList.add('active')
+        setTimeout(()=>pulse.classList.remove('active'),400)
+      }
+      logTo('logPipeline',msg)
+    },delay)
+  })
+}
+
+function pipelineAuto(){
+  const btn=document.getElementById('btnPA')
+  if(pAutoTimer){
+    clearInterval(pAutoTimer); pAutoTimer=null
+    btn.textContent='▶ Auto'
+  } else {
+    pAutoTimer=setInterval(pipelineStep,1400)
+    btn.textContent='⏸ Stop'
+    pipelineStep()
+  }
+}
+function pipelineReset(){
+  if(pAutoTimer){clearInterval(pAutoTimer);pAutoTimer=null;document.getElementById('btnPA').textContent='▶ Auto'}
+  batchFill.fill(0)
+  for(let i=0;i<3;i++){
+    document.getElementById('bf'+i).style.width='0%'
+    document.getElementById('bp'+i).textContent='0%'
+  }
+  document.getElementById('logPipeline').innerHTML=''
+  pMsgCount=0
+}
+
+/* ════════════════════════════════════
+   TAB 2 — BATCHING
+════════════════════════════════════ */
+let batchCounter0=0, batchCounter1=0
+let rtrips0=0, rtrips1=0
+let b1pending=[], b1timer=null
+
+function batchReset(){
+  batchCounter0=batchCounter1=rtrips0=rtrips1=0
+  b1pending=[]; if(b1timer){clearTimeout(b1timer);b1timer=null}
+  document.getElementById('br0').innerHTML=''
+  document.getElementById('br1').innerHTML=''
+  document.getElementById('mb0').textContent='Broker: 0 batches received'
+  document.getElementById('mb1').textContent='Broker: 0 batches received'
+  document.getElementById('nc0').innerHTML='Network round-trips: <b>0</b>'
+  document.getElementById('nc1').innerHTML='Network round-trips: <b class="good">0</b>'
+  document.getElementById('logBatch').innerHTML=''
+}
+
+function mkRec(id,cls){
+  const d=document.createElement('div'); d.className='mini-rec '+(cls||'')
+  d.textContent=id; return d
+}
+
+function batchSend(){
+  const records=[]
+  for(let i=1;i<=8;i++) records.push('r'+(++batchCounter0 + batchCounter1>batchCounter0?batchCounter1:batchCounter0-8+i))
+
+  // reset label counter
+  const base0=rtrips0*8+1
+  const base1=rtrips1*(b1pending.length||8)+1
+
+  // LEFT card (linger=0): sends each immediately
+  const c0=document.getElementById('br0')
+  logTo('logBatch','<span class="info">linger=0</span>  sending 8 records — each gets its own network trip')
+  records.forEach((_,i)=>{
+    setTimeout(()=>{
+      const id='r'+(rtrips0*8+i+1)
+      const el=mkRec(id,'')
+      c0.appendChild(el)
+      setTimeout(()=>{
+        el.classList.add('sending')
+        setTimeout(()=>{
+          el.classList.remove('sending'); el.classList.add('batched')
+          rtrips0++
+          document.getElementById('nc0').innerHTML=`Network round-trips: <b>${rtrips0}</b>`
+          document.getElementById('mb0').textContent=`Broker: ${rtrips0} batches received`
+          if(rtrips0%8===0) logTo('logBatch',`<span class="bad">linger=0</span>  8 records → 8 separate network round-trips (wasteful)`)
+        },200)
+      },100)
+    },i*120)
+  })
+
+  // RIGHT card (linger=10ms): accumulates then sends all together
+  const c1=document.getElementById('br1')
+  logTo('logBatch','<span class="info">linger=10</span> accumulating records into batch…')
+  records.forEach((_,i)=>{
+    setTimeout(()=>{
+      const id='r'+(rtrips1*8+i+1)
+      const el=mkRec(id,'')
+      c1.appendChild(el)
+      b1pending.push(el)
+    },i*120)
+  })
+
+  if(b1timer) clearTimeout(b1timer)
+  b1timer=setTimeout(()=>{
+    b1pending.forEach(el=>el.classList.add('sending'))
+    setTimeout(()=>{
+      b1pending.forEach(el=>{ el.classList.remove('sending'); el.classList.add('batched') })
+      b1pending=[]
+      rtrips1++
+      document.getElementById('nc1').innerHTML=`Network round-trips: <b class="good">${rtrips1}</b>`
+      document.getElementById('mb1').textContent=`Broker: ${rtrips1} batches received`
+      logTo('logBatch',`<span class="ok">linger=10</span> 8 records → 1 batch → 1 network round-trip ✓`)
+    },300)
+  },1200)
+}
+
+/* ════════════════════════════════════
+   TAB 3 — IDEMPOTENCE
+════════════════════════════════════ */
+const PID=7842
+let iSeq0=0, iSeq1=0
+let bSeq0=-1, bSeq1=-1
+
+function idemReset(){
+  iSeq0=iSeq1=0; bSeq0=bSeq1=-1
+  document.getElementById('pidBadge').textContent='PID = —'
+  document.getElementById('msgList').innerHTML=''
+  document.getElementById('brokerLog').innerHTML=''
+  document.getElementById('bs0').textContent='—'
+  document.getElementById('bs1').textContent='—'
+  document.getElementById('logIdem').innerHTML=''
+  logTo('logIdem','<span class="info">RESET</span> — producer restarted, new PID will be assigned on first send')
+}
+
+function setPID(){
+  if(document.getElementById('pidBadge').textContent==='PID = —'){
+    document.getElementById('pidBadge').textContent=`PID = ${PID}`
+    logTo('logIdem',`<span class="info">INIT</span> — broker assigned PID=${PID} to this producer session`)
+  }
+}
+
+function addMsgRow(pid,seq,partition,status){
+  const ml=document.getElementById('msgList')
+  const d=document.createElement('div')
+  d.className='msg-record '+(status==='ok'?'ok':status==='dup'?'dup':'ooo')
+  let badge=status==='ok'?`<span class="tag ok">✓ accepted</span>`:
+            status==='dup'?`<span class="tag dup">⊘ duplicate</span>`:
+            `<span class="tag ooo">⚠ out-of-order</span>`
+  d.innerHTML=`<span class="tag pid">PID=${pid}</span><span class="tag seq">seq=${seq}</span><span style="color:#475569">→ ${partition}</span> ${badge}`
+  ml.appendChild(d)
+  ml.scrollTop=ml.scrollHeight
+}
+
+function addBrokerRow(msg,color){
+  const bl=document.getElementById('brokerLog')
+  const d=document.createElement('div')
+  d.style.cssText=`font-size:0.65rem;color:${color};line-height:1.9`
+  d.textContent=msg
+  bl.appendChild(d)
+  bl.scrollTop=bl.scrollHeight
+}
+
+function idemNormal(){
+  setPID()
+  const p=Math.random()<0.5?0:1
+  const seq=p===0?iSeq0++:iSeq1++
+  addMsgRow(PID,seq,`P${p}`,'ok')
+  if(p===0){ bSeq0=seq; document.getElementById('bs0').textContent=seq }
+  else      { bSeq1=seq; document.getElementById('bs1').textContent=seq }
+  addBrokerRow(`✓ P${p} seq=${seq} accepted (expected ${seq})`, '#4ade80')
+  logTo('logIdem',`<span class="ok">SEND</span>  PID=${PID} seq=${seq} → P${p} — broker accepted, last_seq updated to ${seq}`)
+}
+
+function idemRetry(){
+  setPID()
+  const p=Math.random()<0.5?0:1
+  const lastSeq=p===0?Math.max(0,iSeq0-1):Math.max(0,iSeq1-1)
+  addMsgRow(PID,lastSeq,`P${p}`,'dup')
+  addBrokerRow(`⊘ P${p} seq=${lastSeq} DUPLICATE — already have seq=${p===0?bSeq0:bSeq1}, silently dropped`, '#f87171')
+  logTo('logIdem',`<span class="bad">RETRY</span> PID=${PID} seq=${lastSeq} → P${p} — broker sees dup seq, <b>silently drops</b> (no error thrown)`)
+}
+
+function idemOOO(){
+  setPID()
+  const p=0
+  const skipSeq=(iSeq0+3)
+  addMsgRow(PID,skipSeq,`P${p}`,'ooo')
+  addBrokerRow(`⚠ P${p} seq=${skipSeq} OUT-OF-ORDER — expected ${iSeq0}, got ${skipSeq} → OutOfOrderSequenceException`, '#fbbf24')
+  logTo('logIdem',`<span class="bad">OOO</span>   PID=${PID} seq=${skipSeq} → P${p} — broker expected ${iSeq0}, rejects with OutOfOrderSequenceException`)
+}
+
+/* init */
+logTo('logPipeline','Pipeline visualizer ready — click Send 1 Record or Auto')
+</script>
+</body>
+</html>
